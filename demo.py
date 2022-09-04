@@ -1,12 +1,19 @@
 import numpy as np
 import torch
 import os
+import pathlib
+import pandas as pd
+import json
 
+from torch.utils.data.dataset import Subset
+from torch.utils.tensorboard import SummaryWriter
 from torchvision.models.detection.faster_rcnn import fasterrcnn_resnet50_fpn
 
 from model.densecap import densecap_resnet50_fpn
 from data_loader import DenseCapDataset, DataLoaderPFG
 from evaluate import  quantity_check
+
+from apex import amp
 
 torch.backends.cudnn.benchmark = True
 np.random.seed(42)
@@ -44,6 +51,11 @@ def set_args():
     args['use_pretrain_fasterrcnn'] = True
     args['box_detections_per_img'] = 50
 
+    if not os.path.exists(os.path.join(CONFIG_PATH, MODEL_NAME)):
+        os.mkdir(os.path.join(CONFIG_PATH, MODEL_NAME))
+    with open(os.path.join(CONFIG_PATH, MODEL_NAME, 'config.json'), 'w') as f:
+        json.dump(args, f, indent=2)
+
     return args
 
 
@@ -52,12 +64,12 @@ def save_model(model, optimizer, amp_, results_on_val, iter_counter, flag=None):
     state = {'model': model.state_dict(),
              'optimizer': optimizer.state_dict(),
              'amp': amp_.state_dict(),
-             'results_on_val':results_on_val,
+             'results_on_val': results_on_val,
              'iterations': iter_counter}
     if isinstance(flag, str):
-        filename = os.path.join('model_params', '{}_{}.pth.tar'.format(MODEL_NAME, flag))
+        filename = os.path.join('./result', '{}_{}.pth.tar'.format(MODEL_NAME, flag))
     else:
-        filename = os.path.join('model_params', '{}.pth.tar'.format(MODEL_NAME))
+        filename = os.path.join('result', '{}.pth.tar'.format(MODEL_NAME))
     print('Saving checkpoint to {}'.format(filename))
     torch.save(state, filename)
 
@@ -101,7 +113,7 @@ O1 가장 기본으로 사용하는 opt_level, Tensor Core에서 사용하는 �
 '''
 
 opt_level = 'O1'
-from apex import amp
+
 model, optimizer = amp.initialize(model, optimizer, opt_level=opt_level)
 
 model.roi_heads.box_roi_pool.forward = \
@@ -110,12 +122,7 @@ model.roi_heads.box_roi_pool.forward = \
 ####################
 # with data loader
 
-import pathlib
-from torch.utils.data.dataset import Subset
-
-from torch.utils.tensorboard import SummaryWriter
-
-MAX_EPOCHS = 1
+MAX_EPOCHS = 10
 USE_TB = True
 CONFIG_PATH = './model_params'
 MODEL_NAME = 'train_all_val_all_bz_2_epoch_10_inject_init'
@@ -140,11 +147,10 @@ if MAX_VAL_IMAGE > 0:
     val_set = Subset(val_set, range(MAX_VAL_IMAGE))
 
 train_loader = DataLoaderPFG(train_set, batch_size=args['batch_size'],
-                             shuffle=True, num_workers=0,
+                             shuffle=True, num_workers=2,
                              pin_memory=True,
                              collate_fn=DenseCapDataset.collate_fn)
 
-iter_counter = 0
 best_map = 0.
 
 # use tensorboard to track the loss
@@ -154,8 +160,9 @@ if USE_TB:
 start = torch.cuda.Event(enable_timing=True)
 end = torch.cuda.Event(enable_timing=True)
 
+history = list()
 for epoch in range(MAX_EPOCHS):
-
+    iter_counter = 0
     for batch, (img, targets, info) in enumerate(train_loader):
         start.record()
 
@@ -192,10 +199,9 @@ for epoch in range(MAX_EPOCHS):
                               losses['loss_box_reg'].item(), iter_counter)
 
         if iter_counter % (len(train_set) / (args['batch_size'] * 16)) == 0:
-            print("[{}][{}]\ntotal_loss {:.3f}".format(epoch, batch,
+            print("[{}][{}]\ntotal_loss {:.3f}".format(epoch + 1, batch,
                                                        total_loss.item()))
-            for k, v in losses.items():
-                print(" <{}> {:.3f}".format(k, v))
+
 
         optimizer.zero_grad()
         # total_loss.backward()
@@ -204,10 +210,10 @@ for epoch in range(MAX_EPOCHS):
             scaled_loss.backward()
         optimizer.step()
 
-        if iter_counter > 0 and iter_counter % 20000 == 0:
+        if iter_counter > 0 and iter_counter % 1000 == 0:
             try:
                 results = quantity_check(model, val_set, idx_to_token, device,
-                                         max_iter=-1, verbose=True)
+                                         max_iter=-1, verbose=True) # quantity_check 확인 필요
                 if results['map'] > best_map:
                     best_map = results['map']
                     save_model(model, optimizer, amp, results, iter_counter)
@@ -224,17 +230,33 @@ for epoch in range(MAX_EPOCHS):
 
         end.record()
         torch.cuda.synchronize()
-        expected_running_time = (start.elapsed_time(end) / 1000) * \
-                                (len(train_loader) - iter_counter) * MAX_EPOCHS
 
         if iter_counter % 10 == 0:
+            history.append([epoch + 1, iter_counter, total_loss.item(),
+                            detect_loss.item(),
+                            caption_loss.item(),
+                            scaled_loss.item()])
+
+            expected_running_time = (start.elapsed_time(end) / 1000) * \
+                                    (len(train_loader) - iter_counter)
+
             print(f'expected training end time : '
+                  f'epoch: {epoch+1} | {MAX_EPOCHS} / '
                   f'{expected_running_time // 3600}h / '
                   f'{(expected_running_time % 3600) // 60}m / '
                   f'{(expected_running_time % 3600) % 60:.1f}s')
-        print(f'epoch : {epoch} / {MAX_EPOCHS}, iter_cnt = {iter_counter} / '
+
+        print(f'epoch : {epoch+1} / {MAX_EPOCHS}, iter_cnt = {iter_counter} / '
               f'{len(train_loader)}, total_loss : {total_loss.item():.4f}')
 
         iter_counter += 1
 
     save_model(model, optimizer, amp, results, iter_counter, flag='end')
+    torch.save(model.state_dict(), f'./result/model_220818{epoch + 1}epoch.pth')
+
+if USE_TB:
+    writer.close()
+
+
+df = pd.DataFrame(history, columns=['epoch', 'iter', 'total_loss', 'detect_loss', 'caption_loss', 'scaled_loss'])
+df.to_csv(f'./loss_22.08.18-1015.csv', sep=',', index=False)

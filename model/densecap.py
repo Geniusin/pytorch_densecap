@@ -21,7 +21,7 @@ class DenseCapModel(GeneralizedRCNN):
                  emb_size=None, rnn_num_layers=None, vocab_size=None,
                  fusion_type='init_inject',
                  # transform parameters
-                 min_size=300, max_size=720,  # 300不确定
+                 min_size=300, max_size=720,
                  image_mean=None, image_std=None,
                  # RPN parameters
                  rpn_anchor_generator=None, rpn_head=None,
