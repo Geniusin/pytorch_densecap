@@ -12,7 +12,7 @@ from model.roi_heads import DenseCapRoIHeads
 
 
 
-class DenseCapModel(GeneralizedRCNN):
+class DenseCapModel(GeneralizedRCNN): # GeneralizedRCNN 상속
 
     def __init__(self, backbone, return_features = False,
                  # Caption parameters
@@ -54,12 +54,15 @@ class DenseCapModel(GeneralizedRCNN):
 
         out_channels = backbone.out_channels
 
+        # Anchor_generator
         if rpn_anchor_generator is None:
             anchor_sizes = ((32,), (64,), (128,), (256,), (512,))
             aspect_ratios = ((0.5, 1.0, 2.0),) * len(anchor_sizes)
             rpn_anchor_generator = AnchorGenerator(
                 anchor_sizes, aspect_ratios
             )
+
+        # RPN Head :
         if rpn_head is None:
             rpn_head = RPNHead(
                 out_channels, rpn_anchor_generator.num_anchors_per_location()[0]
@@ -67,6 +70,7 @@ class DenseCapModel(GeneralizedRCNN):
 
         rpn_pre_nms_top_n = dict(training=rpn_pre_nms_top_n_train, testing=rpn_pre_nms_top_n_test)
         rpn_post_nms_top_n = dict(training=rpn_post_nms_top_n_train, testing=rpn_post_nms_top_n_test)
+
 
         rpn = RegionProposalNetwork(
             rpn_anchor_generator, rpn_head,
@@ -143,8 +147,8 @@ class TwoMLPHead(nn.Module):
 
 def densecap_resnet50_fpn(backbone_pretrained=False, **kwargs):
 
-    backbone = resnet_fpn_backbone('resnet50', backbone_pretrained)
-    model = DenseCapModel(backbone, **kwargs)
+    backbone = resnet_fpn_backbone('resnet50', backbone_pretrained) # backbone
+    model = DenseCapModel(backbone, **kwargs) # RPN + Language
 
     return model
 

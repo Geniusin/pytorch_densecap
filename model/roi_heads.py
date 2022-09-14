@@ -246,10 +246,9 @@ class DenseCapRoIHeads(nn.Module):
 
         box_features = self.box_roi_pool(features, proposals, image_shapes)
         box_features = self.box_head(box_features)
-        logits, box_regression = self.box_predictor(box_features)
+        logits, box_regression = self.box_predictor(box_features) # box_predictor = fasterrcnn_loss
         if self.training:
-            # labels 到这里应该是有0和（1，class-1），0代表背景，其余代表类别，需要剔除背景，然后进行描述(List[Tensor])
-            # 也需要滤除对应的caption和caption_length
+
             keep_ids = [label>0 for label in labels]
             boxes_per_image = [boxes_in_image.shape[0] for boxes_in_image in proposals]
             box_features = box_features.split(boxes_per_image, 0)
